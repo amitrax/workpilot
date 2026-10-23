@@ -5,32 +5,71 @@ import { createMiddlewareClient } from "@/lib/supabase/middleware";
 const AUTH_ROUTES = ["/login", "/signup"];
 
 // Public routes that anyone can access without being logged in
-const PUBLIC_ROUTES = ["/login", "/signup", "/auth"];
+const PUBLIC_ROUTES = ["/", "/login", "/signup", "/auth"];
 
 export async function middleware(request) {
   const { pathname } = request.nextUrl;
 
-  const { supabaseResponse, user } = await createMiddlewareClient(request);
-
   const isPublicRoute = PUBLIC_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(route + "/")
+    (route) =>
+      pathname === route || (route !== "/" && pathname.startsWith(route + "/"))
   );
 
-  // ── Redirect unauthenticated users away from protected pages ──────────────
-  if (!user && !isPublicRoute) {
-    const loginUrl = new URL("/login", request.url);
-    // Preserve intended destination so we can redirect back after login
+  try {
+    const { supabaseResponse, user } = await createMiddlewareClient(request);
+
+    // ── Handle API Routes ───────────────────────────────────────────────────
+    if (pathname.startsWith("/api/")) {
+      if (!user && !isPublicRoute) {
+        return NextResponse.json(
+          { error: "Unauthorized", message: "Authentication required" },
+          { status: 401 }
+        );
+      }
+      return supabaseResponse;
+    }
+
+    // ── Redirect authenticated users away from login/signup ─────────────────
+    if (user && AUTH_ROUTES.includes(pathname)) {
+      const homeUrl = request.nextUrl.clone();
+      homeUrl.pathname = "/";
+      homeUrl.search = "";
+      return NextResponse.redirect(homeUrl);
+    }
+
+    // ── Redirect unauthenticated users away from protected pages ────────────
+    if (!user && !isPublicRoute) {
+      const loginUrl = request.nextUrl.clone();
+      loginUrl.pathname = "/login";
+      // Preserve intended destination so we can redirect back after login
+      loginUrl.searchParams.set("redirectTo", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    // ── All good — return response with refreshed session cookies ───────────
+    return supabaseResponse;
+  } catch (err) {
+    console.error("[middleware] Unhandled middleware error:", err?.message || err);
+
+    // If an API route fails, return a JSON response instead of crashing with HTML 500
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "Internal Server Error", message: "Middleware error occurred" },
+        { status: 500 }
+      );
+    }
+
+    // If public route, allow access so login/signup/home pages never break
+    if (isPublicRoute) {
+      return NextResponse.next({ request });
+    }
+
+    // For protected routes on error, redirect safely to /login
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
     loginUrl.searchParams.set("redirectTo", pathname);
     return NextResponse.redirect(loginUrl);
   }
-
-  // ── Redirect authenticated users away from login/signup ───────────────────
-  if (user && AUTH_ROUTES.includes(pathname)) {
-    return NextResponse.redirect(new URL("/", request.url));
-  }
-
-  // ── All good — return the response with refreshed session cookies ─────────
-  return supabaseResponse;
 }
 
 export const config = {
