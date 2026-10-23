@@ -25,6 +25,15 @@ export default function DashboardPage() {
     setLoading(true);
     setError(null);
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) {
+        window.location.href = "/login?redirectTo=/";
+        return;
+      }
+
       const { workspaceId: wsId } = await getOrCreateCurrentWorkspace(supabase);
       setWorkspaceId(wsId);
 

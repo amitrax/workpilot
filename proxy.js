@@ -5,7 +5,7 @@ import { createMiddlewareClient } from "@/lib/supabase/middleware";
 const AUTH_ROUTES = ["/login", "/signup"];
 
 // Public routes that anyone can access without being logged in
-const PUBLIC_ROUTES = ["/", "/login", "/signup", "/auth"];
+const PUBLIC_ROUTES = ["/login", "/signup", "/auth"];
 
 /**
  * Copies cookies from the supabaseResponse to a redirect or rewritten response

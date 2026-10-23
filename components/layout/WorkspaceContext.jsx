@@ -38,6 +38,22 @@ export function WorkspaceProvider({ children }) {
       setLoading(true);
       setError(null);
 
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser();
+
+      if (!currentUser) {
+        if (typeof window !== "undefined") {
+          const pathname = window.location.pathname;
+          if (pathname !== "/login" && pathname !== "/signup") {
+            window.location.href = `/login?redirectTo=${encodeURIComponent(pathname)}`;
+            return;
+          }
+        }
+        setLoading(false);
+        return;
+      }
+
       const wsResult = await getOrCreateCurrentWorkspace(supabase);
       const wsId = wsResult.workspaceId;
       const wsData = wsResult.workspace || {

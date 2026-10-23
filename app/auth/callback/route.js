@@ -15,6 +15,8 @@ import { getOrCreateCurrentWorkspace } from "@/lib/supabase/workspace";
 export async function GET(request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
+  const token_hash = requestUrl.searchParams.get("token_hash");
+  const type = requestUrl.searchParams.get("type");
   const next =
     requestUrl.searchParams.get("redirectTo") ||
     requestUrl.searchParams.get("next") ||
@@ -37,12 +39,56 @@ export async function GET(request) {
 
   if (error || errorDescription) {
     const errorMsg =
-      errorDescription || error || "Google sign-in was cancelled or failed.";
+      errorDescription || error || "Authentication was cancelled or failed.";
     return NextResponse.redirect(
       `${baseUrl}/login?error=${encodeURIComponent(errorMsg)}`
     );
   }
 
+  // Handle email confirmation or OTP verification via token_hash
+  if (token_hash) {
+    try {
+      const supabase = await createClient();
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({
+        token_hash,
+        type: type || "signup",
+      });
+
+      if (verifyError) {
+        console.error(
+          "[Auth Callback] Failed to verify OTP token:",
+          verifyError
+        );
+        return NextResponse.redirect(
+          `${baseUrl}/login?error=${encodeURIComponent(
+            verifyError.message || "Failed to verify email confirmation link."
+          )}`
+        );
+      }
+
+      if (data?.user) {
+        try {
+          await getOrCreateCurrentWorkspace(supabase);
+        } catch (wsErr) {
+          console.warn(
+            "[Auth Callback] Workspace provisioning warning:",
+            wsErr?.message || wsErr
+          );
+        }
+      }
+
+      return NextResponse.redirect(`${baseUrl}${destination}`);
+    } catch (err) {
+      console.error("[Auth Callback] Unexpected error during OTP verification:", err);
+      return NextResponse.redirect(
+        `${baseUrl}/login?error=${encodeURIComponent(
+          err?.message || "An unexpected error occurred during email verification."
+        )}`
+      );
+    }
+  }
+
+  // Handle OAuth code exchange
   if (code) {
     try {
       const supabase = await createClient();
@@ -51,7 +97,7 @@ export async function GET(request) {
 
       if (exchangeError) {
         console.error(
-          "[OAuth Callback] Failed to exchange code for session:",
+          "[Auth Callback] Failed to exchange code for session:",
           exchangeError
         );
         return NextResponse.redirect(
@@ -68,7 +114,7 @@ export async function GET(request) {
         } catch (wsErr) {
           // Log warning; client-side WorkspaceProvider will also attempt workspace resolution
           console.warn(
-            "[OAuth Callback] Workspace provisioning warning:",
+            "[Auth Callback] Workspace provisioning warning:",
             wsErr?.message || wsErr
           );
         }
@@ -77,19 +123,19 @@ export async function GET(request) {
       // Redirect user to destination with active session
       return NextResponse.redirect(`${baseUrl}${destination}`);
     } catch (err) {
-      console.error("[OAuth Callback] Unexpected error:", err);
+      console.error("[Auth Callback] Unexpected error:", err);
       return NextResponse.redirect(
         `${baseUrl}/login?error=${encodeURIComponent(
-          err?.message || "An unexpected error occurred during Google sign-in."
+          err?.message || "An unexpected error occurred during authentication."
         )}`
       );
     }
   }
 
-  // Fallback if neither code nor error was provided
+  // Fallback if neither code nor token_hash was provided
   return NextResponse.redirect(
     `${baseUrl}/login?error=${encodeURIComponent(
-      "No authorization code was returned from Google."
+      "Invalid or expired authentication link. Please sign in or request a new confirmation email."
     )}`
   );
 }

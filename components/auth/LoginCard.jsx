@@ -2,14 +2,13 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ArrowRight } from "lucide-react";
 import InputField from "./InputField";
 import SocialLoginButton from "./SocialLoginButton";
 import { createClient } from "@/lib/supabase/client";
 
 export default function LoginCard() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [email, setEmail] = useState("");
@@ -18,6 +17,9 @@ export default function LoginCard() {
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState("");
+  const [isUnconfirmed, setIsUnconfirmed] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
 
   // Surface any errors returned from the OAuth callback route
   const urlError = searchParams.get("error");
@@ -25,7 +27,11 @@ export default function LoginCard() {
 
   useEffect(() => {
     if (urlError || urlErrorDescription) {
-      setError(urlErrorDescription || urlError);
+      const msg = urlErrorDescription || urlError;
+      setError(msg);
+      if (/email.*not.*confirm/i.test(msg)) {
+        setIsUnconfirmed(true);
+      }
     }
   }, [urlError, urlErrorDescription]);
 
@@ -65,16 +71,54 @@ export default function LoginCard() {
     }
   };
 
+  const handleResendConfirmation = async () => {
+    if (resendLoading || !email.trim()) {
+      if (!email.trim()) {
+        setError("Please enter your email address to resend confirmation.");
+      }
+      return;
+    }
+
+    setResendLoading(true);
+    setResendMessage("");
+
+    try {
+      const supabase = createClient();
+      const redirectTo = searchParams.get("redirectTo") || "/";
+      const callbackUrl = `${window.location.origin}/auth/callback?redirectTo=${encodeURIComponent(redirectTo)}`;
+
+      const { error: resendErr } = await supabase.auth.resend({
+        type: "signup",
+        email: email.trim(),
+        options: {
+          emailRedirectTo: callbackUrl,
+        },
+      });
+
+      if (resendErr) {
+        setResendMessage(`Failed to resend: ${resendErr.message}`);
+      } else {
+        setResendMessage("Confirmation email resent! Please check your inbox and spam folder.");
+      }
+    } catch (err) {
+      setResendMessage(err?.message || "Failed to resend confirmation email.");
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (loading || googleLoading) return; // Prevent duplicate execution
 
     setError("");
+    setIsUnconfirmed(false);
+    setResendMessage("");
     setLoading(true);
 
     try {
       const supabase = createClient();
-      const { error: signInError } = await supabase.auth.signInWithPassword({
+      const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       });
@@ -86,19 +130,30 @@ export default function LoginCard() {
           /rate limit/i.test(msg) ||
           /too many requests/i.test(msg);
 
-        setError(
-          isRateLimit
-            ? "Too many requests. Please wait a moment and try again."
-            : msg
-        );
+        if (isRateLimit) {
+          setError("Too many requests. Please wait a moment and try again.");
+        } else if (/email.*not.*confirm/i.test(msg)) {
+          setIsUnconfirmed(true);
+          setError("Your email address has not been confirmed yet. Please check your inbox or resend the confirmation link below.");
+        } else if (/invalid login credentials/i.test(msg)) {
+          setError("Invalid email or password. If you recently signed up, please verify whether your email requires confirmation.");
+        } else {
+          setError(msg);
+        }
         setLoading(false);
         return;
       }
 
-      // Redirect to the originally intended page, or fallback to dashboard
+      // Verify that a valid session exists before redirecting
+      if (!data?.session) {
+        setError("Sign in succeeded but no active session was established. Please try again.");
+        setLoading(false);
+        return;
+      }
+
+      // Perform a full page redirect so updated cookies are sent with the initial request to proxy.js
       const redirectTo = searchParams.get("redirectTo") || "/";
-      router.push(redirectTo);
-      router.refresh(); // ensure server components re-render with the new session
+      window.location.href = redirectTo;
     } catch (err) {
       setError(err?.message || "An unexpected error occurred during sign in.");
       setLoading(false);
@@ -121,9 +176,30 @@ export default function LoginCard() {
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Inline error message */}
         {error && (
-          <div className="flex items-start gap-2 rounded-xl bg-red-50 border border-red-200/80 px-3.5 py-3 text-xs text-red-700">
-            <span className="mt-0.5 shrink-0">⚠️</span>
-            <span>{error}</span>
+          <div className="rounded-xl bg-red-50 border border-red-200/80 p-3.5 text-xs text-red-700 space-y-2">
+            <div className="flex items-start gap-2">
+              <span className="mt-0.5 shrink-0">⚠️</span>
+              <span>{error}</span>
+            </div>
+            {isUnconfirmed && (
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={resendLoading}
+                  className="px-3 py-1.5 bg-red-100/80 hover:bg-red-200 text-red-800 rounded-lg font-semibold text-[11px] transition-colors disabled:opacity-60"
+                >
+                  {resendLoading ? "Resending..." : "Resend confirmation email"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Resend success notice */}
+        {resendMessage && (
+          <div className={`rounded-xl p-3 text-xs ${resendMessage.includes('Failed') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+            {resendMessage}
           </div>
         )}
 

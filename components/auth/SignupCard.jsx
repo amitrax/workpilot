@@ -85,6 +85,9 @@ export default function SignupCard() {
     "Other",
   ];
 
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
+
   const formatAuthError = (err) => {
     const msg = err?.message || "";
     const isRateLimit =
@@ -95,25 +98,61 @@ export default function SignupCard() {
       /too many requests/i.test(msg);
 
     if (isRateLimit) {
-      return "Too many signup emails were requested. Please wait and try again later.";
+      return "Too many signup emails were requested. Please wait a moment and try again later.";
+    }
+    if (/already registered/i.test(msg) || /already exists/i.test(msg)) {
+      return "An account with this email address already exists. Please sign in instead.";
     }
     return msg || "An unexpected error occurred during signup.";
   };
 
+  const handleResendConfirmation = async () => {
+    if (resendLoading || !workEmail) return;
+    setResendLoading(true);
+    setResendMessage("");
+
+    try {
+      const supabase = createClient();
+      const redirectTo = searchParams.get("redirectTo") || "/";
+      const callbackUrl = `${window.location.origin}/auth/callback?redirectTo=${encodeURIComponent(redirectTo)}`;
+
+      const { error: resendErr } = await supabase.auth.resend({
+        type: "signup",
+        email: workEmail.trim(),
+        options: {
+          emailRedirectTo: callbackUrl,
+        },
+      });
+
+      if (resendErr) {
+        setResendMessage(`Failed to resend: ${resendErr.message}`);
+      } else {
+        setResendMessage("Confirmation email resent successfully. Please check your inbox and spam folder.");
+      }
+    } catch (err) {
+      setResendMessage(err?.message || "Failed to resend confirmation email.");
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (loading) return; // Prevent duplicate execution
+    if (loading || googleLoading) return; // Prevent duplicate execution
 
     setError("");
     setLoading(true);
 
     try {
       const supabase = createClient();
+      const redirectTo = searchParams.get("redirectTo") || "/";
+      const callbackUrl = `${window.location.origin}/auth/callback?redirectTo=${encodeURIComponent(redirectTo)}`;
 
-      const { error: signUpError } = await supabase.auth.signUp({
+      const { data, error: signUpError } = await supabase.auth.signUp({
         email: workEmail.trim(),
         password,
         options: {
+          emailRedirectTo: callbackUrl,
           // These are stored in raw_user_meta_data and used by the
           // handle_new_user() DB trigger to populate the profiles table.
           data: {
@@ -131,7 +170,22 @@ export default function SignupCard() {
         return;
       }
 
-      // Show confirmation — Supabase sends a verification email by default.
+      // Check if user already exists (Supabase email enumeration protection
+      // returns user with empty identities list when account already exists)
+      if (data?.user?.identities && data.user.identities.length === 0) {
+        setError("An account with this email address already exists. Please sign in instead.");
+        setLoading(false);
+        return;
+      }
+
+      // If an active session was returned (email confirmation disabled in Supabase),
+      // redirect immediately to destination
+      if (data?.session) {
+        window.location.href = redirectTo;
+        return;
+      }
+
+      // Email confirmation required — show verification instruction screen
       setSuccess(true);
       setLoading(false);
     } catch (err) {
@@ -152,26 +206,45 @@ export default function SignupCard() {
         </p>
       </div>
 
-      {/* ── Success State ────────────────────────────────────────────────────── */}
+      {/* ── Success State: Email Confirmation Required ─────────────────────── */}
       {success ? (
         <div className="space-y-4 py-4 text-center">
-          <div className="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+          <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mx-auto">
             <CheckCircle size={28} />
           </div>
           <div>
             <h3 className="text-base font-bold text-gray-900">
-              Account created successfully!
+              Verify your email to continue
             </h3>
-            <p className="text-xs text-gray-500 mt-1">
-              Please check your email (<span className="font-semibold text-gray-700">{workEmail}</span>) to verify your account, or sign in to continue.
+            <p className="text-xs text-gray-600 mt-2 leading-relaxed">
+              We sent a confirmation link to <span className="font-semibold text-gray-900">{workEmail}</span>.
+              Please click the link in your email to activate your account.
+            </p>
+            <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200/80 rounded-xl px-3 py-2 mt-3 text-left">
+              ⚠️ <strong>Important:</strong> You must confirm your email before signing in. Attempting to sign in before clicking the confirmation link will result in an &quot;Invalid login credentials&quot; or &quot;Email not confirmed&quot; error.
             </p>
           </div>
-          <div className="pt-2">
+
+          {resendMessage && (
+            <div className={`p-3 rounded-xl text-xs ${resendMessage.includes('Failed') ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-emerald-50 text-emerald-700 border border-emerald-200'}`}>
+              {resendMessage}
+            </div>
+          )}
+
+          <div className="pt-2 space-y-2">
+            <button
+              type="button"
+              onClick={handleResendConfirmation}
+              disabled={resendLoading}
+              className="inline-flex w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200/60 items-center justify-center gap-2 transition-colors disabled:opacity-60"
+            >
+              {resendLoading ? "Resending confirmation email..." : "Resend confirmation email"}
+            </button>
             <Link
               href="/login"
               className="inline-flex w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 hover:from-indigo-700 hover:to-purple-700 shadow-md shadow-indigo-500/25 items-center justify-center gap-2"
             >
-              <span>Go to Sign In</span>
+              <span>Back to Sign In</span>
               <ArrowRight size={14} />
             </Link>
           </div>
