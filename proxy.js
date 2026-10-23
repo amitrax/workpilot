@@ -85,10 +85,6 @@ export async function proxy(request) {
   }
 }
 
-// Export both named proxy and legacy middleware alias for backwards compatibility
-export { proxy as middleware };
-export default proxy;
-
 export const config = {
   matcher: [
     /*
