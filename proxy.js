@@ -7,7 +7,20 @@ const AUTH_ROUTES = ["/login", "/signup"];
 // Public routes that anyone can access without being logged in
 const PUBLIC_ROUTES = ["/", "/login", "/signup", "/auth"];
 
-export async function middleware(request) {
+/**
+ * Copies cookies from the supabaseResponse to a redirect or rewritten response
+ * so that session refresh or logout cookies are not lost during redirects.
+ */
+function applyCookies(sourceResponse, targetResponse) {
+  if (sourceResponse && targetResponse) {
+    sourceResponse.cookies.getAll().forEach((cookie) => {
+      targetResponse.cookies.set(cookie.name, cookie.value, cookie);
+    });
+  }
+  return targetResponse;
+}
+
+export async function proxy(request) {
   const { pathname } = request.nextUrl;
 
   const isPublicRoute = PUBLIC_ROUTES.some(
@@ -34,7 +47,7 @@ export async function middleware(request) {
       const homeUrl = request.nextUrl.clone();
       homeUrl.pathname = "/";
       homeUrl.search = "";
-      return NextResponse.redirect(homeUrl);
+      return applyCookies(supabaseResponse, NextResponse.redirect(homeUrl));
     }
 
     // ── Redirect unauthenticated users away from protected pages ────────────
@@ -43,18 +56,18 @@ export async function middleware(request) {
       loginUrl.pathname = "/login";
       // Preserve intended destination so we can redirect back after login
       loginUrl.searchParams.set("redirectTo", pathname);
-      return NextResponse.redirect(loginUrl);
+      return applyCookies(supabaseResponse, NextResponse.redirect(loginUrl));
     }
 
     // ── All good — return response with refreshed session cookies ───────────
     return supabaseResponse;
   } catch (err) {
-    console.error("[middleware] Unhandled middleware error:", err?.message || err);
+    console.error("[proxy] Unhandled error during request processing:", err?.message || err);
 
     // If an API route fails, return a JSON response instead of crashing with HTML 500
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
-        { error: "Internal Server Error", message: "Middleware error occurred" },
+        { error: "Internal Server Error", message: "Proxy error occurred" },
         { status: 500 }
       );
     }
@@ -72,6 +85,10 @@ export async function middleware(request) {
   }
 }
 
+// Export both named proxy and legacy middleware alias for backwards compatibility
+export { proxy as middleware };
+export default proxy;
+
 export const config = {
   matcher: [
     /*
@@ -81,6 +98,6 @@ export const config = {
      *   - favicon.ico, sitemap.xml, robots.txt
      *   - Public assets (images, fonts, etc.)
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
+    "/((?!_next/static|_next/image|favicon.ico|sitemap.xml|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|woff2?)$).*)",
   ],
 };
